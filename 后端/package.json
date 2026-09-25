@@ -1,0 +1,21 @@
+{
+  "name": "lengming-social-api-sqlite",
+  "version": "1.0.0",
+  "description": "LENG_MING 社交小游戏网站后端API - SQLite 零配置版",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "better-sqlite3": "^11.7.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "ws": "^8.18.0",
+    "cors": "^2.8.5"
+  }
+}

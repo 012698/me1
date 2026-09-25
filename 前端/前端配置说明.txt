@@ -1,0 +1,27 @@
+=== 前端部署说明 ===
+
+1. 这是你的完整前端文件，单文件 HTML，零依赖，直接浏览器打开即可运行
+
+2. 社交功能（登录/聊天/好友）需要后端 API，当前指向：
+   const API_BASE = 'https://你的render应用名.onrender.com';
+   const WS_BASE = 'wss://你的render应用名.onrender.com';
+
+3.【必改】部署后端后，用文本编辑器打开 index.html，找到第16行附近：
+   const API_BASE = 'https://你的render应用名.onrender.com';
+   const WS_BASE = 'wss://你的render应用名.onrender.com';
+   
+   改成你的云服务器地址，例如：
+   const API_BASE = 'http://123.45.67.89:3000';
+   const WS_BASE = 'ws://123.45.67.89:3000';
+   
+   注意：HTTP 对应 ws://，HTTPS 对应 wss://
+
+4. 前端平台（扣子 Pages）部署：
+   - 直接上传 index.html 即可
+   - 国内直连地址：https://v7wgb4vgpz.page.coze.site
+   - 纯静态部署，不需要服务器
+
+5. 如果前后端同机部署，也可以把 index.html 放到后端 public/ 目录
+   这样访问 http://服务器IP:3000 就能同时打开前端
+
+6. 管理员密码在 .env 文件中设置（首次部署时 deploy.sh 自动生成 .env）

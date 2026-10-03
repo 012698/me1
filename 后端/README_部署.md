@@ -1,197 +1,187 @@
-# LENG_MING 后端部署教程（SQLite 零配置版）
+# LENG_MING 社交网站后端 — Aiven PostgreSQL 版
 
-> 零数据库依赖，启动即用，适合个人/小团队轻量部署。
+## 技术栈
 
----
+- **运行时**: Node.js 22+
+- **Web框架**: Express 4
+- **数据库**: Aiven PostgreSQL（云端托管）
+- **WebSocket**: ws
+- **认证**: JWT + bcryptjs
+- **其他**: cors
 
-## 一、购买服务器
+## 目录结构
 
-推荐以下轻量应用服务器，**免备案**，便宜好用：
-
-| 平台 | 推荐配置 | 参考价格 | 备注 |
-|------|---------|---------|------|
-| **腾讯云** | 轻量应用服务器 2核2G | ¥50-70/年 | 选**香港/新加坡**地域，免备案 |
-| **阿里云** | 轻量应用服务器 2核2G | ¥60-80/年 | 选**香港**地域，免备案 |
-
-> 💡 **重要**：选「香港」或「新加坡」地域可以免去域名备案流程，开通后直接可用。
-
-系统选 **Ubuntu 22.04 LTS** 或 **Debian 12**。
-
----
-
-## 二、上传文件到服务器
-
-### 方法 A：scp 命令（推荐）
-
-在你本地电脑终端执行：
-
-```bash
-scp -r backend_sqlite/* root@你的服务器IP:/opt/lengming/
+```
+backend_pg/
+├── server.js          # 主服务文件（~800行，所有API + WebSocket）
+├── package.json       # 依赖声明
+├── .env.example       # 环境变量模板
+├── deploy.sh          # 一键部署脚本
+└── public/            # 前端静态文件（需手动放入）
 ```
 
-### 方法 B：SFTP 工具
+## 快速开始
 
-使用 [WinSCP](https://winscp.net/)（Windows）或 [FileZilla](https://filezilla-project.org/)（全平台），连接服务器后把 `backend_sqlite/` 目录整个拖到 `/opt/lengming/`。
+### 1. 获取 Aiven PostgreSQL 连接串
 
-### 方法 C：Git 拉取
+1. 登录 [Aiven Console](https://console.aiven.io/)
+2. 创建 PostgreSQL 服务（免费层即可）
+3. 进入服务详情页 → **Connection Information**
+4. 复制 **Service URI**（格式如 `postgres://user:pass@host:port/defaultdb?sslmode=require`）
 
-如果代码在 GitHub/Gitee：
+### 2. 配置环境变量
 
 ```bash
-ssh root@你的服务器IP
-cd /opt
-git clone 你的仓库地址 lengming
-cd lengming
+cd backend_pg
+cp .env.example .env
 ```
 
----
+编辑 `.env`，**至少填写** `DATABASE_URL`：
 
-## 三、一键部署
+```env
+DATABASE_URL=postgres://avnuser:secret@pg-host.aivencloud.com:12345/defaultdb?sslmode=require
+PG_SSL=true
+PORT=3000
+JWT_SECRET=your-random-secret-key-here
+ADMIN_PASSWORD=your-admin-password
+```
 
-SSH 登录服务器后执行：
+### 3. 安装依赖并启动
 
 ```bash
-ssh root@你的服务器IP
+npm install
+npm start
+```
 
-cd /opt/lengming
+或使用部署脚本（会自动检查环境和配置）：
+
+```bash
 chmod +x deploy.sh
 bash deploy.sh
 ```
 
-脚本会自动完成：
-- ✅ 检测并安装 Node.js 20+
-- ✅ npm install 安装依赖
-- ✅ 自动建库建表
-- ✅ PM2 启动服务 + 开机自启
-- ✅ 生成随机 JWT_SECRET
+### 4. 验证
 
-部署完成后输出服务地址，如 `http://123.45.67.89:3000`
+- 健康检查：`curl http://localhost:3000/api/health`
+- 首次启动自动建表，无需手动执行 SQL
 
----
+## 与 SQLite 版的区别
 
-## 四、开放防火墙端口
+| 项目 | SQLite 版 | PostgreSQL 版 |
+|------|-----------|---------------|
+| 数据库 | 本地文件 `data/app.db` | Aiven 云端 PostgreSQL |
+| 连接方式 | 零配置 | 需配置 `DATABASE_URL` |
+| 并发支持 | 单进程读写锁 | 真正的并发读写 |
+| 部署复杂度 | 极低 | 需要云端数据库 |
+| 适用场景 | 开发/小流量 | 生产环境/高并发 |
+| 占位符语法 | `?` | `$1, $2, $3...` |
 
-```bash
-# Ubuntu / Debian
-sudo ufw allow 3000/tcp
-sudo ufw reload
+## 生产部署
 
-# CentOS / AlmaLinux
-sudo firewall-cmd --permanent --add-port=3000/tcp
-sudo firewall-cmd --reload
-```
+### Render / Railway
 
-> ⚠️ 云服务器还需要在**控制台安全组**中放行 3000 端口入站！
+1. 推送代码到 GitHub
+2. 在平台新建 Web Service，指向 `backend_pg/` 目录
+3. 在环境变量中配置 `DATABASE_URL`、`JWT_SECRET`、`ADMIN_PASSWORD`
+4. Build Command: `npm install`
+5. Start Command: `npm start`
 
-### 腾讯云安全组设置：
-控制台 → 轻量应用服务器 → 防火墙 → 添加规则 → 端口 3000，TCP，允许
-
-### 阿里云安全组设置：
-控制台 → ECS → 安全组 → 入方向 → 手动添加 → 端口 3000，TCP，授权对象 0.0.0.0/0
-
----
-
-## 五、前端配置
-
-把前端打包好的 `index.html` 放到服务器的 `public/` 目录：
+### VPS (systemd)
 
 ```bash
-# 假设你本地打包出了 dist/
-scp -r dist/* root@你的服务器IP:/opt/lengming/public/
-```
+# 创建服务文件
+sudo tee /etc/systemd/system/lengming-api.service << 'EOF'
+[Unit]
+Description=LENG_MING API (PostgreSQL)
+After=network.target
 
-**前端只需改一行**：把 API 地址改成你的服务器地址：
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/lengming/backend_pg
+EnvironmentFile=/opt/lengming/backend_pg/.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
 
-```javascript
-// 在前端代码中找到 API_BASE_URL 或类似配置
-const API_BASE_URL = 'http://你的服务器IP:3000';
-// 例如：const API_BASE_URL = 'http://123.45.67.89:3000';
-```
-
----
-
-## 六、常用运维命令
-
-```bash
-# 查看服务状态
-pm2 status
-
-# 查看实时日志
-pm2 logs lengming-api
-
-# 重启服务
-pm2 restart lengming-api
-
-# 停止服务
-pm2 stop lengming-api
-
-# 修改管理员密码
-# 编辑 .env 文件中的 ADMIN_PASSWORD，然后重启
-vi /opt/lengming/.env
-pm2 restart lengming-api
-```
-
----
-
-## 七、目录结构说明
-
-```
-/opt/lengming/
-├── server.js          # 后端主程序
-├── package.json       # 依赖配置
-├── .env               # 环境变量（自动生成，含密钥）
-├── deploy.sh          # 一键部署脚本
-├── data/
-│   └── app.db         # SQLite 数据库文件（启动自动创建）
-└── public/
-    └── index.html     # 你的前端文件放这里
-```
-
----
-
-## 八、可选：绑定域名 + HTTPS
-
-如果有域名，推荐用 Nginx 反向代理 + Let's Encrypt 免费证书：
-
-```bash
-# 安装 Nginx 和 certbot
-sudo apt install nginx certbot python3-certbot-nginx -y
-
-# Nginx 配置
-sudo tee /etc/nginx/sites-available/lengming << 'EOF'
-server {
-    listen 80;
-    server_name your-domain.com;
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
+[Install]
+WantedBy=multi-user.target
 EOF
 
-sudo ln -s /etc/nginx/sites-available/lengming /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-
-# 申请 HTTPS 证书
-sudo certbot --nginx -d your-domain.com
+sudo systemctl daemon-reload
+sudo systemctl enable --now lengming-api
 ```
 
----
+### Docker
+
+```dockerfile
+FROM node:22-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm install --production
+COPY . .
+EXPOSE 3000
+CMD ["node", "server.js"]
+```
+
+```bash
+docker build -t lengming-api .
+docker run -d --env-file .env -p 3000:3000 lengming-api
+```
+
+## 数据库迁移（从 SQLite 迁移数据）
+
+如果需要将 SQLite 版的数据迁移到 PostgreSQL：
+
+1. 导出 SQLite 数据为 JSON：
+   ```bash
+   sqlite3 data/app.db ".mode json" ".output users.json" "SELECT * FROM users;"
+   ```
+
+2. 编写迁移脚本，逐条 INSERT 到 PostgreSQL（注意 `?` 改为 `$1, $2...`）
+
+3. 或使用 `pgloader` 工具直接迁移
 
 ## 常见问题
 
-**Q: better-sqlite3 编译失败？**
-A: 确保安装了 `build-essential` 和 `python3`：`sudo apt install build-essential python3`。如果仍然失败，程序会自动回退使用 Node.js 内置的 `node:sqlite` 模块（需 Node 22+）。
+**Q: 连接 Aiven 超时？**
+确保 `PG_SSL=true` 且 `DATABASE_URL` 包含 `?sslmode=require`
 
-**Q: 服务器重启后服务没启动？**
-A: 执行 `pm2 startup` 重新设置开机自启，然后 `pm2 save`。
+**Q: 端口被占用？**
+修改 `.env` 中的 `PORT` 值
 
-**Q: 数据库怎么备份？**
-A: 直接复制 `data/app.db` 文件即可，例如：`cp data/app.db data/app.db.backup`
+**Q: 建表失败？**
+检查数据库用户是否有 CREATE TABLE 权限（Aiven 默认有）
 
-**Q: 默认管理员密码是什么？**
-A: `YOUR_ADMIN_PASSWORD_HERE`，可在 `.env` 文件中修改 `ADMIN_PASSWORD` 后重启。
+**Q: WebSocket 不工作？**
+确保反向代理（nginx）配置了 WebSocket 升级：
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+## API 文档
+
+所有接口与 SQLite 版完全一致，参见前端项目的 `API_BASE` 配置。
+
+**主要接口：**
+- `POST /api/register` — 注册
+- `POST /api/login` — 登录
+- `GET /api/me` — 当前用户
+- `GET /api/friends` — 好友列表
+- `POST /api/messages` — 发送消息
+- `GET /api/messages/:friendId` — 聊天记录
+- `GET /api/categories/approved` — 游戏分类
+- `POST /api/admin/login` — 管理员登录
+- 更多接口见 server.js 路由定义
+
+## 注意事项
+
+1. **不要**将 `.env` 提交到 Git
+2. **必须**在生产环境更换 `JWT_SECRET` 为随机长字符串
+3. Aiven 免费层有连接数限制（通常 5-10 个并发连接），高流量需升级
+4. `pg.Pool` 默认保持连接池，生产环境建议设置 `max` 参数（当前默认 10）

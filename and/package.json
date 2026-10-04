@@ -1,0 +1,21 @@
+{
+  "name": "lengming-backend-pg",
+  "version": "2.0.0",
+  "description": "LENG_MING 社交小游戏网站后端 — Aiven PostgreSQL 版",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "pg": "^8.13.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "ws": "^8.18.0",
+    "cors": "^2.8.5"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

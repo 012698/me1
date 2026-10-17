@@ -1,0 +1,79 @@
+=== LENG_MING 全栈部署指南（Aiven PostgreSQL 版）===
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+第一步：购买云服务器（免备案）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+推荐方案（选一个）：
+  阿里云高校免费：https://university.aliyun.com → 学生认证 → 领免费 ECS
+  腾讯云校园 9元/月：https://cloud.tencent.com/act/campus
+  地域务必选香港（免备案即开即用）
+  系统选 Ubuntu 22.04 LTS
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+第二步：上传后端文件
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+scp -r 后端/* root@服务器IP:/opt/lengming/
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+第三步：配置 .env
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SSH 登录服务器后：
+  cd /opt/lengming
+  cp .env.example .env
+  vi .env
+
+必须填写：
+  DATABASE_URL=postgres://avnadmin:你的密码@lengming-project-b92b.h.aivencloud.com:23420/defaultdb?sslmode=require
+  ADMIN_PASSWORD=你设的管理员密码
+  JWT_SECRET=$(openssl rand -hex 32)  # 生成随机密钥
+
+⚠️ DATABASE_URL 已经有了（你的 Aiven 连接串），直接复制进去
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+第四步：一键部署
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  chmod +x deploy.sh
+  bash deploy.sh
+
+自动完成：安装 Node.js 22+ → npm install → PM2 启动 + 开机自启 → 自动建表
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+第五步：开放端口
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+服务器防火墙：sudo ufw allow 3000/tcp
+云平台安全组：控制台 → 安全组/防火墙 → 添加规则 → 端口3000/TCP
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+第六步：改前端 API 地址
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+在 index.html 第16-17行改为：
+  const API_BASE = 'http://你的服务器公网IP:3000';
+  const WS_BASE = 'ws://你的服务器公网IP:3000';
+
+然后重新部署前端到扣子 Pages
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+第七步：验证
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. 浏览器打开 http://服务器IP:3000/api/health
+   应返回 {"status":"ok","database":"connected"}
+2. 打开前端网站，测试登录/聊天/好友
+3. 游戏功能是离线的，不需要后端
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+日常运维
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  pm2 status              # 看状态
+  pm2 logs lengming-api   # 看日志
+  pm2 restart lengming-api  # 重启
+  
+  改管理员密码：vi .env → 改 ADMIN_PASSWORD → pm2 restart lengming-api
+  数据库备份：Aiven Console → Backups → 下载

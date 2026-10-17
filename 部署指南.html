@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LENG_MING 后端部署指南 — Northflank</title>
+<style>
+:root{--bg:#0f1117;--card:#1a1d27;--border:#2a2d3a;--text:#e4e4e7;--dim:#8b8b9e;--accent:#6366f1;--accent2:#818cf8;--green:#22c55e;--orange:#f59e0b;--red:#ef4444;--mono:'SF Mono',Consolas,'Liberation Mono',Menlo,monospace}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.7;padding:1.5rem}
+h1{font-size:1.8rem;font-weight:700;margin-bottom:.5rem}
+h2{font-size:1.3rem;font-weight:600;color:var(--accent2);margin:2rem 0 .8rem;border-left:3px solid var(--accent);padding-left:.6rem}
+h3{font-size:1.05rem;font-weight:600;margin:1rem 0 .4rem}
+p{margin-bottom:.7rem}
+a{color:var(--accent2);text-decoration:none}
+a:hover{text-decoration:underline}
+code{font-family:var(--mono);background:#12131a;padding:.15em .4em;border-radius:4px;font-size:.88em;color:#c4b5fd}
+pre{background:#12131a;border:1px solid var(--border);border-radius:8px;padding:1rem;overflow-x:auto;margin:.6rem 0 1rem;font-family:var(--mono);font-size:.85rem;line-height:1.6}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.2rem;margin:1rem 0}
+.badge{display:inline-block;padding:.15em .55em;border-radius:4px;font-size:.78em;font-weight:600;margin-right:.4rem}
+.badge-green{background:#16a34a22;color:var(--green)}
+.badge-orange{background:#f59e0b22;color:var(--orange)}
+.badge-red{background:#ef444422;color:var(--red)}
+.step-num{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700;font-size:.85rem;margin-right:.5rem;flex-shrink:0}
+.step-row{display:flex;align-items:flex-start;gap:.5rem;margin-bottom:.4rem}
+.tip{background:#1e1b3a;border-left:3px solid var(--accent);padding:.7rem 1rem;border-radius:0 6px 6px 0;margin:.8rem 0}
+.warn{background:#2a1f0a;border-left:3px solid var(--orange);padding:.7rem 1rem;border-radius:0 6px 6px 0;margin:.8rem 0}
+.danger{background:#2a0a0a;border-left:3px solid var(--red);padding:.7rem 1rem;border-radius:0 6px 6px 0;margin:.8rem 0}
+ul{padding-left:1.3rem;margin-bottom:.7rem}
+li{margin-bottom:.3rem}
+table{width:100%;border-collapse:collapse;margin:.8rem 0}
+th,td{text-align:left;padding:.45rem .7rem;border-bottom:1px solid var(--border)}
+th{color:var(--dim);font-size:.82em;font-weight:600;text-transform:uppercase}
+.progress-bar{display:flex;gap:.35rem;margin:1.2rem 0;flex-wrap:wrap}
+.progress-bar span{padding:.25em .65em;border-radius:4px;font-size:.78em;font-weight:500}
+.pb-done{background:#16a34a33;color:var(--green)}
+.pb-current{background:#6366f133;color:var(--accent2)}
+.pb-pending{background:#2a2d3a;color:var(--dim)}
+@media(max-width:600px){body{padding:1rem}h1{font-size:1.4rem}pre{font-size:.78rem}}
+</style>
+</head>
+<body>
+
+<h1>🚀 LENG_MING 后端部署指南</h1>
+<p style="color:var(--dim)">目标：将 Node.js 后端部署到 Northflank（免费），连接 Aiven PostgreSQL，然后更新前端指向新地址。</p>
+
+<div class="progress-bar">
+<span class="pb-done">✅ 前端部署</span>
+<span class="pb-done">✅ Aiven 数据库</span>
+<span class="pb-done">✅ 后端代码</span>
+<span class="pb-current">⬢ 后端托管</span>
+<span class="pb-pending">⬢ 前端API地址更新</span>
+<span class="pb-pending">⬢ 全栈验证</span>
+</div>
+
+<div class="card">
+<h3 style="margin:0 0 .5rem">当前状态</h3>
+<table>
+<tr><th>组件</th><th>状态</th><th>位置</th></tr>
+<tr><td>前端</td><td><span class="badge badge-green">已部署</span></td><td>https://v7wgb4vgpz.page.coze.site</td></tr>
+<tr><td>后端</td><td><span class="badge badge-orange">待部署</span></td><td>→ Northflank</td></tr>
+<tr><td>数据库</td><td><span class="badge badge-green">已就绪</span></td><td>Aiven PostgreSQL（免费版）</td></tr>
+</table>
+</div>
+
+<!-- ====== 第1步 ====== -->
+<h2>第1步 · 注册 Northflank</h2>
+
+<ol>
+<li>打开 <a href="https://app.northflank.com/signup" target="_blank" rel="noopener noreferrer">https://app.northflank.com/signup</a></li>
+<li>用 <strong>GitHub 账号</strong>登录（推荐）或 Google/邮箱注册</li>
+<li>注册后自动进入 Dashboard，选择 <strong>Sandbox 计划</strong>（免费，无需信用卡）</li>
+</ol>
+
+<div class="tip">
+<strong>Sandbox 免费额度：</strong>2个常驻服务 + 1个免费数据库 + 2个定时任务。服务<strong>不休眠</strong>，WebSocket 不会断。256MB 内存够跑你的后端。
+</div>
+
+<!-- ====== 第2步 ====== -->
+<h2>第2步 · 上传代码到 GitHub</h2>
+
+<p>Northflank 从 GitHub 拉代码来构建部署。你需要先把后端代码推到 GitHub。</p>
+
+<h3>2.1 创建 GitHub 仓库</h3>
+<ol>
+<li>登录 <a href="https://github.com/new" target="_blank" rel="noopener noreferrer">GitHub → New repository</a></li>
+<li>仓库名：<code>lengming-backend</code></li>
+<li>选 <strong>Private</strong>（推荐，因为含数据库连接串）</li>
+<li><strong>不要</strong>勾选 README / .gitignore / License</li>
+<li>点 Create repository</li>
+</ol>
+
+<h3>2.2 推送代码</h3>
+<p>在你本地电脑的终端执行：</p>
+<pre>cd backend_pg   # 进入后端代码目录
+
+# 初始化 Git
+git init
+git add .
+git commit -m "init: LENG_MING backend (PostgreSQL)"
+
+# 推送到 GitHub（把 YOUR_USERNAME 换成你的 GitHub 用户名）
+git remote add origin https://github.com/YOUR_USERNAME/lengming-backend.git
+git branch -M main
+git push -u origin main</pre>
+
+<div class="warn">
+<strong>重要：</strong>推送前确认 <code>.env</code> 文件<strong>不在</strong>代码目录里（只有 <code>.env.example</code>），避免泄露数据库密码。当前代码已经脱敏，<code>.env.example</code> 里都是占位符，安全。
+</div>
+
+<h3>2.3 需要推送的文件清单</h3>
+<div class="card" style="padding:.8rem 1rem">
+<code>server.js</code> · <code>package.json</code> · <code>.env.example</code> · <code>deploy.sh</code> · <code>README_部署.md</code>
+</div>
+<p style="color:var(--dim);font-size:.88rem">你拿到的部署整理包里 <code>后端/</code> 目录就是这些文件，解压后直接用。</p>
+
+<!-- ====== 第3步 ====== -->
+<h2>第3步 · 在 Northflank 创建服务</h2>
+
+<ol>
+<li>回到 <a href="https://app.northflank.com" target="_blank" rel="noopener noreferrer">Northflank Dashboard</a></li>
+<li>点 <strong>Create project</strong>，名称填 <code>lengming</code></li>
+<li>在项目里点 <strong>Create service</strong></li>
+<li>选择 <strong>From Git repository</strong></li>
+<li>连接你的 GitHub 账号，选择 <code>lengming-backend</code> 仓库</li>
+<li>分支选 <code>main</code></li>
+<li>Build type 选 <strong>Buildpack</strong>（自动识别 Node.js，零配置）</li>
+<li>Compute plan 选 <strong>nf-compute-10</strong>（0.1 vCPU / 256MB，免费额度内）</li>
+<li>点 <strong>Deploy</strong></li>
+</ol>
+
+<div class="tip">
+<strong>Buildpack 自动处理：</strong>读 <code>package.json</code> → 运行 <code>npm install</code> → 用 <code>npm start</code> 启动。<code>package.json</code> 里已经写好了 <code>"start": "node server.js"</code>，不用改任何东西。
+</div>
+
+<!-- ====== 第4步 ====== -->
+<h2>第4步 · 配置环境变量</h2>
+
+<p>部署会先失败（因为缺少 <code>DATABASE_URL</code>），这是正常的。现在来设置环境变量：</p>
+
+<ol>
+<li>在 Service 页面点 <strong>Secrets</strong>（或 Environment variables）</li>
+<li>逐条添加以下变量：</li>
+</ol>
+
+<div class="card">
+<table>
+<tr><th>变量名</th><th>值</th><th>说明</th></tr>
+<tr>
+<td><code>DATABASE_URL</code></td>
+<td><code style="word-break:break-all">postgres://avnadmin:AVNS_ZqyqrkG7U9AK6SUFmKv@lengming-project-b92b.h.aivencloud.com:23420/defaultdb?sslmode=require</code></td>
+<td>你的 Aiven 连接串</td>
+</tr>
+<tr>
+<td><code>PG_SSL</code></td>
+<td><code>true</code></td>
+<td>Aiven 需要 SSL</td>
+</tr>
+<tr>
+<td><code>JWT_SECRET</code></td>
+<td>点下方按钮生成</td>
+<td>JWT 签名密钥</td>
+</tr>
+<tr>
+<td><code>ADMIN_PASSWORD</code></td>
+<td>你自己定一个</td>
+<td>管理后台密码，自己记住</td>
+</tr>
+</table>
+</div>
+
+<h3>生成 JWT_SECRET</h3>
+<p>在终端运行：</p>
+<pre>node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"</pre>
+<p>把输出的64位十六进制字符串填到 <code>JWT_SECRET</code> 里。</p>
+
+<div class="warn">
+<strong>ADMIN_PASSWORD：</strong>这是你管理后台的登录密码，自己定一个（比如 <code>LengMing2026!</code>），<strong>一定要记住</strong>。部署后别人无法查看这个值。
+</div>
+
+<ol start="3">
+<li>设置完后，点 <strong>Redeploy</strong> 重新部署</li>
+<li>等构建完成，状态变为 <span class="badge badge-green">Running</span></li>
+</ol>
+
+<!-- ====== 第5步 ====== -->
+<h2>第5步 · 获取后端地址</h2>
+
+<p>部署成功后，在 Service 页面找到 <strong>External endpoints</strong> 区域，会看到类似这样的地址：</p>
+<pre>https://lengming-backend-xxxx.northflank.app</pre>
+
+<p>这就是你的后端 API 地址。WebSocket 地址把 <code>https://</code> 改成 <code>wss://</code>：</p>
+<pre>wss://lengming-backend-xxxx.northflank.app</pre>
+
+<div class="tip">
+<strong>验证：</strong>在浏览器打开 <code>https://你的地址/api/health</code>，看到 <code>{"status":"ok","db":"connected"}</code> 就说明后端+数据库都通了。
+</div>
+
+<!-- ====== 第6步 ====== -->
+<h2>第6步 · 更新前端 API 地址</h2>
+
+<p>拿到后端地址后，告诉我，我会帮你：</p>
+<ol>
+<li>修改 <code>index.html</code> 第16-17行的 <code>API_BASE</code> 和 <code>WS_BASE</code></li>
+<li>重新部署前端到扣子 Pages</li>
+<li>验证全栈功能</li>
+</ol>
+
+<p>如果你想自己改，只需要改两行：</p>
+<pre>// 第16行：把占位符换成你的 Northflank 地址
+const API_BASE = 'https://lengming-backend-xxxx.northflank.app';
+const WS_BASE = 'wss://lengming-backend-xxxx.northflank.app';</pre>
+
+<!-- ====== 汇总 ====== -->
+<h2>📋 操作清单</h2>
+
+<div class="card">
+<div class="step-row"><span class="step-num">1</span><span>注册 Northflank（Sandbox 免费计划）</span></div>
+<div class="step-row"><span class="step-num">2</span><span>创建 GitHub 仓库 + 推送后端代码</span></div>
+<div class="step-row"><span class="step-num">3</span><span>Northflank 创建 Service（From Git，Buildpack，nf-compute-10）</span></div>
+<div class="step-row"><span class="step-num">4</span><span>设置4个环境变量（DATABASE_URL / PG_SSL / JWT_SECRET / ADMIN_PASSWORD）</span></div>
+<div class="step-row"><span class="step-num">5</span><span>Redeploy → 等Running → 访问 /api/health 验证</span></div>
+<div class="step-row"><span class="step-num">6</span><span>拿到 External endpoint 地址 → 告诉我 → 我更新前端+重部署</span></div>
+</div>
+
+<div class="danger">
+<strong>只有1件事需要你自己操作：</strong>买/注册任何东西以外的步骤——注册 Northflank、推代码到 GitHub、在 Northflank 点点鼠标创建服务。总共大约 <strong>15 分钟</strong>搞定。拿到后端地址后告诉我，剩下我全帮你完成。
+</div>
+
+<footer style="margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--border);color:var(--dim);font-size:.8rem">
+LENG_MING 全栈部署指南 · Northflank + Aiven PostgreSQL + Coze Pages · 2026-10-07
+</footer>
+
+</body>
+</html>

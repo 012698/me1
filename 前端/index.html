@@ -15,7 +15,7 @@
     // ===== 后端部署配置 =====
     const API_BASE = 'https://你的render应用名.onrender.com';
     const WS_BASE = 'wss://你的render应用名.onrender.com';
-    const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme';
+    const ADMIN_PASSWORD = 'YOUR_ADMIN_PASSWORD_HERE';
     
     // ===== 管理员标签权限 =====
     function setFriendAdminTag(friendId, tag) {
@@ -1351,7 +1351,7 @@ function CarController({ onBack }) {
 
   async function esp32Cmd(path) { try { await fetch(esp32Base + path, { mode: 'no-cors' }); } catch(e) {} }
   async function esp32Get(path) { try { const r = await fetch(esp32Base + path); return await r.text(); } catch(e) { return null; } }
-  async function connectEsp32() { try { await fetch(esp32Base + '/pwd?pass=YOUR_ADMIN_PASSWORD_HEREL', { mode: 'no-cors' }); setEsp32Connected(true); } catch(e) { setEsp32Connected(false); } }
+  async function connectEsp32() { try { await fetch(esp32Base + '/pwd?pass=YOUR_ADMIN_PASSWORD_HERE', { mode: 'no-cors' }); setEsp32Connected(true); } catch(e) { setEsp32Connected(false); } }
   function disconnectEsp32() { setEsp32Connected(false); setCameraOn(false); if(driveMode==='auto') esp32Cmd('/autooff'); esp32Cmd('/cmd?action=stop'); }
 
   // 运行计时器

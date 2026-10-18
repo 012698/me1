@@ -1,13 +1,13 @@
 // ============================================================
 // LENG_MING 社交小游戏网站 — 后端 API 服务 (Aiven PostgreSQL 版)
-// 技术栈：Node.js 22+ + Express + pg + WebSocket(ws) + bcryptjs + JWT
+// 技术栈：Node.js 22+ + Express + pg + bcryptjs + JWT
 // 部署：需配置 DATABASE_URL 环境变量连接 Aiven PostgreSQL
 //
 // 安全功能（v2）：
 // - 登录/注册限流（用户名+IP双重，内存Map）
 // - 账号临时锁定（连续5次密码错误→锁定15分钟）
-// - 单设备在线（新登录踢旧设备WS + kicked通知）
-// - 密码泄露告警（security_alert WebSocket推送）
+// - 单设备在线（新登录踢旧设备 + 通知表推送）
+// - 密码泄露告警（security_alert 通知表推送）
 // - 异地登录检测（新旧IP对比，new_ip_login告警）
 // - 安全审计日志（security_events表，7种事件类型）
 // - 修改密码API（POST /api/change-password）
@@ -17,8 +17,6 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { createServer } = require('http');
-const { WebSocketServer } = require('ws');
 const cors = require('cors');
 const crypto = require('crypto');
 const path = require('path');
@@ -176,10 +174,24 @@ async function initTables() {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_se_type_time ON security_events(event_type, created_at)`,
     `CREATE INDEX IF NOT EXISTS idx_se_user_time ON security_events(user_id, created_at)`,
+
+    `CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      data TEXT,
+      is_read INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_notif_user_read ON notifications(user_id, is_read, created_at)`,
   ];
 
   for (const sql of statements) {
-    await pool.query(sql);
+    try {
+      await pool.query(sql);
+    } catch (e) {
+      console.error('建表警告:', e.message, '\nSQL:', sql.slice(0, 100));
+    }
   }
   console.log('✅ PostgreSQL 建表完成');
 }
@@ -197,7 +209,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 const SALT_ROUNDS = 10;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'YOUR_ADMIN_PASSWORD_HERE';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'YOUR_ADMIN_PASSWORD';
 
 // ==================== 节流防护：每IP每分钟最多60次请求 ====================
 const ipThrottle = {};
@@ -233,15 +245,25 @@ function now() { return new Date().toISOString().slice(0, 19).replace('T', ' ');
 function sanitize(str) { return typeof str === 'string' ? str.replace(/[<>'";\\]/g, '') : str; }
 
 // ==================== DB 辅助函数 ====================
+// 安全检查：禁止无 WHERE 的 DELETE（防止清空全表）
+function safeSql(sql) {
+  const upper = sql.toUpperCase().trim();
+  if (upper.startsWith('DELETE') && !upper.includes('WHERE')) {
+    throw new Error('安全限制：禁止无WHERE条件的DELETE操作');
+  }
+}
 async function dbAll(sql, params = []) {
+  safeSql(sql);
   const r = await pool.query(sql, params);
   return r.rows;
 }
 async function dbGet(sql, params = []) {
+  safeSql(sql);
   const r = await pool.query(sql, params);
   return r.rows[0];
 }
 async function dbRun(sql, params = []) {
+  safeSql(sql);
   await pool.query(sql, params);
 }
 
@@ -253,6 +275,16 @@ async function logError(errorType, errorDetail, triggerAction, userId, deviceInf
       [uuid(), now(), errorType, String(errorDetail).slice(0, 2000), triggerAction || '', userId || null, deviceInfo || '']
     );
   } catch (e) { console.error('写入日志失败:', e.message); }
+}
+
+// 写入通知（替代 wsBroadcast）
+async function pushNotification(userId, type, data) {
+  try {
+    await dbRun(
+      'INSERT INTO notifications (id, user_id, type, data, is_read, created_at) VALUES ($1,$2,$3,$4,0,$5)',
+      [uuid(), userId, type, JSON.stringify(data), now()]
+    );
+  } catch (e) { console.error('写入通知失败:', e.message); }
 }
 
 // ==================== 安全功能：限流 Map ====================
@@ -341,48 +373,6 @@ function recordRegister(ip) {
 function getClientIp(req) {
   return req.ip || req.connection?.remoteAddress || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 'unknown';
 }
-
-// ==================== WebSocket 连接管理 ====================
-const wsClients = new Map();
-const wsServer = new WebSocketServer({ noServer: true });
-
-function wsBroadcast(userId, data) {
-  const clients = wsClients.get(userId);
-  if (!clients) return;
-  const msg = JSON.stringify(data);
-  clients.forEach(ws => { if (ws.readyState === 1) ws.send(msg); });
-}
-
-wsServer.on('connection', async (ws) => {
-  let userId = null;
-  ws.on('message', async (raw) => {
-    try {
-      const msg = JSON.parse(raw);
-      if (msg.type === 'auth') {
-        const decoded = jwt.verify(msg.token, JWT_SECRET);
-        userId = decoded.userId;
-        ws.userId = userId;
-        if (!wsClients.has(userId)) wsClients.set(userId, new Set());
-        wsClients.get(userId).add(ws);
-        await dbRun('UPDATE users SET is_online=1, last_seen=$1 WHERE id=$2', [now(), userId]);
-        ws.send(JSON.stringify({ type: 'auth_ok' }));
-      } else if (msg.type === 'ping') {
-        ws.send(JSON.stringify({ type: 'pong' }));
-      }
-    } catch (e) { ws.send(JSON.stringify({ type: 'error', error: e.message })); }
-  });
-  ws.on('close', async () => {
-    if (userId) {
-      const clients = wsClients.get(userId);
-      if (clients) { clients.delete(ws); if (clients.size === 0) wsClients.delete(userId); }
-      setTimeout(async () => {
-        if (!wsClients.has(userId) || wsClients.get(userId).size === 0) {
-          try { await dbRun('UPDATE users SET is_online=0, last_seen=$1 WHERE id=$2', [now(), userId]); } catch {}
-        }
-      }, 5000);
-    }
-  });
-});
 
 // ==================== API 路由 ====================
 
@@ -494,9 +484,8 @@ app.post('/api/login', async (req, res) => {
     // ⑤ 异地登录检测：查询上次成功登录的IP
     const lastLogin = await dbGet("SELECT ip FROM login_attempts WHERE username=$1 AND success=1 ORDER BY created_at DESC LIMIT 1 OFFSET 1", [rawUsername]);
     if (lastLogin && lastLogin.ip && lastLogin.ip !== ip) {
-      // 通过 WebSocket 通知旧设备（如果在线）
-      wsBroadcast(user.id, {
-        type: 'security_alert',
+      // 通过通知表推送异地登录告警
+      pushNotification(user.id, 'security_alert', {
         alertType: 'new_ip_login',
         message: '你的账号在新设备/IP上登录',
         newIp: ip,
@@ -506,38 +495,30 @@ app.post('/api/login', async (req, res) => {
       await logSecurityEvent('new_ip_login', user.id, rawUsername, ip, { oldIp: lastLogin.ip, newIp: ip }, 'warning');
     }
 
-    // ⑥ 单设备在线：踢掉旧设备
+    // ⑥ 单设备在线：踢掉旧设备（通过通知表推送）
     const sessionId = uuid();
     const deviceFingerprint = crypto.createHash('md5').update(ip + ua).digest('hex');
-    const oldClients = wsClients.get(user.id);
-    if (oldClients && oldClients.size > 0) {
-      // 向旧设备发送 kicked + security_alert
-      const kickMsg = JSON.stringify({
-        type: 'kicked',
-        reason: 'concurrent_login',
-        message: '你的账号在其他设备上登录，如非本人操作请立即修改密码！'
-      });
-      const alertMsg = JSON.stringify({
-        type: 'security_alert',
-        alertType: 'concurrent_login',
-        message: '检测到你的账号在其他设备上登录，可能存在密码泄露风险！',
-        suggestion: '建议立即修改密码',
-        newIp: ip,
-        timestamp: now()
-      });
-      oldClients.forEach(ws => {
-        if (ws.readyState === 1) {
-          ws.send(kickMsg);
-          ws.send(alertMsg);
-          ws.close();
-        }
-      });
-      // 记录旧会话为已踢
-      try {
+
+    // 将旧会话标记为已踢
+    try {
+      const oldSessions = await dbAll("SELECT id FROM user_sessions WHERE user_id=$1 AND is_current=1", [user.id]);
+      if (oldSessions.length > 0) {
         await dbRun("UPDATE user_sessions SET is_current=0, kicked_reason='concurrent_login' WHERE user_id=$1 AND is_current=1", [user.id]);
-      } catch {}
-      await logSecurityEvent('concurrent_login', user.id, rawUsername, ip, { kickedSessions: oldClients.size }, 'warning');
-    }
+        // 向旧设备推送踢人通知和安全告警
+        await pushNotification(user.id, 'kicked', {
+          reason: 'concurrent_login',
+          message: '你的账号在其他设备上登录，如非本人操作请立即修改密码！'
+        });
+        await pushNotification(user.id, 'security_alert', {
+          alertType: 'concurrent_login',
+          message: '检测到你的账号在其他设备上登录，可能存在密码泄露风险！',
+          suggestion: '建议立即修改密码',
+          newIp: ip,
+          timestamp: now()
+        });
+        await logSecurityEvent('concurrent_login', user.id, rawUsername, ip, { kickedSessions: oldSessions.length }, 'warning');
+      }
+    } catch (e) { console.error('踢旧设备失败:', e.message); }
 
     // 写入新会话记录
     try {
@@ -639,7 +620,7 @@ app.post('/api/friends/request', authMiddleware, async (req, res) => {
     const id = uuid();
     await dbRun('INSERT INTO friendships (id, user_id, friend_id, status, created_at) VALUES ($1,$2,$3,$4,$5)',
       [id, req.user.userId, targetUserId, 'pending', now()]);
-    wsBroadcast(targetUserId, { type: 'friend_request', data: { id, fromUserId: req.user.userId, fromUsername: req.user.username } });
+    pushNotification(targetUserId, 'friend_request', { id, fromUserId: req.user.userId, fromUsername: req.user.username });
     res.json({ success: true, id });
   } catch (e) { await logError('friend_request_error', e.message, 'send_friend_request', req.user.userId, ''); res.status(500).json({ error: '发送申请失败' }); }
 });
@@ -660,7 +641,7 @@ app.post('/api/friends/accept/:id', authMiddleware, async (req, res) => {
       await dbRun('INSERT INTO friendships (id, user_id, friend_id, status, created_at) VALUES ($1,$2,$3,$4,$5)',
         [uuid(), req.user.userId, row.user_id, 'accepted', now()]);
     }
-    wsBroadcast(row.user_id, { type: 'friend_accepted', data: { byUserId: req.user.userId, byUsername: req.user.username } });
+    pushNotification(row.user_id, 'friend_accepted', { byUserId: req.user.userId, byUsername: req.user.username });
     res.json({ success: true });
   } catch (e) { await logError('friend_accept_error', e.message, 'accept_friend', req.user.userId, ''); res.status(500).json({ error: '接受失败' }); }
 });
@@ -720,7 +701,8 @@ app.put('/api/friends/remark', authMiddleware, async (req, res) => {
   } catch (e) { res.status(500).json({ error: '设置备注失败' }); }
 });
 
-// ---------- 获取私聊历史消息 ----------
+// ---------- 获取私聊历史消息（临时会话模式：仅返回24小时内消息） ----------
+const CHAT_TTL_HOURS = 24; // 聊天消息保留时长（小时）
 app.get('/api/messages/:friendId', authMiddleware, async (req, res) => {
   try {
     const { friendId } = req.params;
@@ -728,7 +710,8 @@ app.get('/api/messages/:friendId', authMiddleware, async (req, res) => {
     const before = req.query.before || null;
     let sql = `SELECT id, sender_id, receiver_id, content, media_url, media_type, file_name, is_read, is_recalled, created_at
                FROM private_messages
-               WHERE ((sender_id=$1 AND receiver_id=$2) OR (sender_id=$2 AND receiver_id=$1))`;
+               WHERE ((sender_id=$1 AND receiver_id=$2) OR (sender_id=$2 AND receiver_id=$1))
+               AND created_at > NOW() - INTERVAL '${CHAT_TTL_HOURS} hours'`;
     const params = [req.user.userId, friendId];
     if (before) { sql += ' AND created_at < $' + (params.length + 1); params.push(before); }
     sql += ' ORDER BY created_at DESC LIMIT $' + (params.length + 1);
@@ -765,7 +748,7 @@ app.post('/api/messages', authMiddleware, async (req, res) => {
       mediaUrl: mediaUrl || null, mediaType: mediaType || null,
       fileName: fileName || null, isRead: false, isRecalled: false, timestamp: now()
     };
-    wsBroadcast(receiverId, { type: 'new_message', data: msg });
+    pushNotification(receiverId, 'new_message', msg);
     res.json(msg);
   } catch (e) { await logError('msg_send_error', e.message, 'send_message', req.user.userId, ''); res.status(500).json({ error: '发送失败' }); }
 });
@@ -780,7 +763,7 @@ app.post('/api/messages/recall/:id', authMiddleware, async (req, res) => {
     const elapsed = Date.now() - new Date(row.created_at).getTime();
     if (elapsed > 120000) return res.status(400).json({ error: '超过2分钟，无法撤回' });
     await dbRun('UPDATE private_messages SET is_recalled=1, content=$1, media_url=NULL WHERE id=$2', ['[消息已撤回]', id]);
-    wsBroadcast(row.receiver_id, { type: 'message_recalled', data: { id } });
+    pushNotification(row.receiver_id, 'message_recalled', { id });
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: '撤回失败' }); }
 });
@@ -805,6 +788,54 @@ app.get('/api/messages/unread', authMiddleware, async (req, res) => {
   } catch (e) { res.status(500).json({ error: '获取未读数失败' }); }
 });
 
+// ---------- 消息轮询（返回 after 之后的所有会话新消息） ----------
+// GET /api/messages/poll?after=2026-10-18T17:00:00
+app.get('/api/messages/poll', authMiddleware, async (req, res) => {
+  try {
+    const after = req.query.after || new Date(Date.now() - 30000).toISOString().slice(0,19).replace('T',' ');
+    const rows = await dbAll(
+      `SELECT id, sender_id, receiver_id, content, media_url, media_type, file_name, is_read, is_recalled, created_at
+       FROM private_messages
+       WHERE (sender_id=$1 OR receiver_id=$1) AND created_at > $2 AND is_recalled=0
+       AND created_at > NOW() - INTERVAL '${CHAT_TTL_HOURS} hours'
+       ORDER BY created_at DESC LIMIT 200`,
+      [req.user.userId, after]
+    );
+    // 批量标记已读
+    const unreadFromOthers = rows.filter(m => m.receiver_id === req.user.userId && !m.is_read);
+    for (const m of unreadFromOthers) {
+      await dbRun('UPDATE private_messages SET is_read=1 WHERE id=$1', [m.id]);
+    }
+    res.json(rows.map(m => ({
+      id: m.id, senderId: m.sender_id, receiverId: m.receiver_id,
+      content: m.content, mediaUrl: m.media_url, mediaType: m.media_type,
+      fileName: m.file_name, isRead: !!m.is_read, isRecalled: !!m.is_recalled,
+      timestamp: m.created_at
+    })));
+  } catch (e) { res.status(500).json({ error: '轮询消息失败' }); }
+});
+
+// ---------- 通知轮询（返回 after 之后的未读通知） ----------
+// GET /api/notifications/poll?after=2026-10-18T17:00:00
+app.get('/api/notifications/poll', authMiddleware, async (req, res) => {
+  try {
+    const after = req.query.after || new Date(Date.now() - 30000).toISOString().slice(0,19).replace('T',' ');
+    const rows = await dbAll(
+      `SELECT id, type, data, is_read, created_at FROM notifications
+       WHERE user_id=$1 AND created_at > $2 ORDER BY created_at DESC LIMIT 100`,
+      [req.user.userId, after]
+    );
+    // 批量标记已读
+    for (const r of rows) {
+      if (!r.is_read) await dbRun('UPDATE notifications SET is_read=1 WHERE id=$1', [r.id]);
+    }
+    res.json(rows.map(r => ({
+      id: r.id, type: r.type, data: JSON.parse(r.data || '{}'),
+      isRead: !!r.is_read, timestamp: r.created_at
+    })));
+  } catch (e) { res.status(500).json({ error: '轮询通知失败' }); }
+});
+
 // ---------- 清空与某人的聊天记录 ----------
 app.delete('/api/messages/clear/:friendId', authMiddleware, async (req, res) => {
   try {
@@ -827,7 +858,7 @@ app.post('/api/upload', authMiddleware, async (req, res) => {
       [id, req.user.userId, receiverId, contentPrefix, mediaData, mediaType, fileName || '', now(), now()]
     );
     const msg = { id, senderId: req.user.userId, receiverId, content: contentPrefix, mediaUrl: mediaData, mediaType, fileName: fileName || '', isRead: false, isRecalled: false, timestamp: now() };
-    wsBroadcast(receiverId, { type: 'new_message', data: msg });
+    pushNotification(receiverId, 'new_message', msg);
     res.json(msg);
   } catch (e) { await logError('upload_error', e.message, 'upload', req.user.userId, ''); res.status(500).json({ error: '上传失败' }); }
 });
@@ -853,17 +884,8 @@ app.post('/api/change-password', authMiddleware, async (req, res) => {
     const ip = getClientIp(req);
     await logSecurityEvent('password_changed', user.id, user.username, ip, { message: '用户主动修改密码' }, 'info');
 
-    // 通过 WebSocket 通知该用户所有连接：密码已修改，需重新登录
-    const clients = wsClients.get(user.id);
-    if (clients && clients.size > 0) {
-      const kickMsg = JSON.stringify({ type: 'password_changed', message: '密码已修改，请重新登录' });
-      clients.forEach(ws => {
-        if (ws.readyState === 1) {
-          ws.send(kickMsg);
-          ws.close();
-        }
-      });
-    }
+    // 通过通知表推送密码修改通知
+    await pushNotification(user.id, 'password_changed', { message: '密码已修改，请重新登录' });
 
     // 将当前会话标记为无效（所有会话都需要重新登录）
     try {
@@ -938,7 +960,7 @@ app.delete('/api/admin/logs', async (req, res) => {
   try {
     const { password } = req.body;
     if (password !== ADMIN_PASSWORD) return res.status(401).json({ error: '密码错误' });
-    await dbRun('DELETE FROM system_logs');
+    await pool.query('DELETE FROM system_logs'); // 管理员操作，直接走 pool.query
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: '清空失败' }); }
 });
@@ -1112,20 +1134,25 @@ async function startServer() {
     // 建表
     await initTables();
 
-    // 启动 HTTP + WebSocket
-    const server = createServer(app);
+    // 启动时清理一次过期消息
+    try {
+      const delResult = await pool.query(`DELETE FROM private_messages WHERE created_at < NOW() - INTERVAL '${CHAT_TTL_HOURS} hours'`);
+      if (delResult.rowCount > 0) console.log(`🧹 启动清理: 删除${delResult.rowCount}条过期聊天消息（>${CHAT_TTL_HOURS}h）`);
+    } catch (e) { console.error('启动清理失败:', e.message); }
 
-    // WebSocket 升级
-    server.on('upgrade', (req, socket, head) => {
-      wsServer.handleUpgrade(req, socket, head, (ws) => {
-        wsServer.emit('connection', ws, req);
-      });
-    });
+    // 每30分钟自动清理过期消息
+    setInterval(async () => {
+      try {
+        const delResult = await pool.query(`DELETE FROM private_messages WHERE created_at < NOW() - INTERVAL '${CHAT_TTL_HOURS} hours'`);
+        if (delResult.rowCount > 0) console.log(`🧹 定时清理: 删除${delResult.rowCount}条过期聊天消息`);
+      } catch (e) { console.error('定时清理失败:', e.message); }
+    }, 30 * 60 * 1000); // 30分钟
 
-    server.listen(PORT, () => {
+    app.listen(PORT, () => {
       console.log(`🚀 API服务启动 (PostgreSQL版): http://0.0.0.0:${PORT}`);
       console.log(`🐘 数据库: Aiven PostgreSQL`);
-      console.log(`🌐 静态前端目录: ./public/`);
+      console.log(`💬 聊天模式: 临时会话（消息保留${CHAT_TTL_HOURS}小时）`);
+      console.log(`📡 实时推送: HTTP轮询（/api/messages/poll + /api/notifications/poll）`);
       console.log(`🔑 管理员密码: ${ADMIN_PASSWORD}`);
     });
   } catch (err) {
